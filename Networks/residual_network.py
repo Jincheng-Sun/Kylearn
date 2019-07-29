@@ -202,7 +202,7 @@ class Resnet_2d(Network):
 
         def bottleneck(inputs, depth, depth_bottleneck, stride):
             depth_in = inputs.shape.dims[-1].value
-            preact = tf.layers.batch_normalization(inputs=inputs, training=is_training, momentum=0.99)
+            preact = tf.layers.batch_normalization(inputs=inputs, training=is_training, momentum=0.999)
             preact = tf.nn.leaky_relu(preact)
 
             if depth == depth_in:
