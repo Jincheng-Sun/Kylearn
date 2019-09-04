@@ -31,7 +31,7 @@ class Attn_model_1d(Model):
             # if use more than one attentions, use tf.scan
             attn_1 = tf.matmul(self.input_dev, w1)
             # attn_1 = tf.layers.batch_normalization(inputs=attn_1, training=self.is_training, momentum=0.999)
-            self.scaling_attention = tf.nn.relu(attn_1)
+            self.scaling_attention = tf.nn.tanh(attn_1)
             attn_1 = tf.expand_dims(self.scaling_attention, axis=-1)
             scaled_input_x = tf.multiply(self.input_x, attn_1)
 
@@ -44,7 +44,7 @@ class Attn_model_1d(Model):
                 self.bias_attention = tf.layers.batch_normalization(inputs=self.bias_attention)
                 self.bias_attention = tf.nn.relu(self.bias_attention)
                 # better for visualization
-                self.attn2 = tf.nn.sigmoid(self.bias_attention)
+                # self.attn2 = tf.nn.sigmoid(self.bias_attention)
 
 
         with tf.variable_scope('logits'):
@@ -59,7 +59,7 @@ class Attn_model_1d(Model):
                                   is_training=self.is_training)
             self.logits = net + self.bias_attention
             # self.logits = tf.multiply(net, self.bias_attention)
-            self.logits = tf.layers.batch_normalization(inputs=self.logits)
+            # self.logits = tf.layers.batch_normalization(inputs=self.logits)
 
         if regression:
             with tf.variable_scope('error'):
@@ -120,7 +120,7 @@ class Attn_model_1d(Model):
                                         feed_dict={self.input_x: batch['x'],
                                                    self.input_dev: batch['dev'],
                                                    self.input_y: batch['y'],
-                                                   self.is_training: False})
+                                                   self.is_training: True})
             step_control = self.run(self.training_control)
             if step_control['time_to_print']:
                 print('train_loss= ' + str(loss) + '    train_acc= '+str(accuracy)+'          round' + str(step_control['step']))
