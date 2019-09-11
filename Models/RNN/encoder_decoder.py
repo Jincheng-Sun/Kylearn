@@ -46,18 +46,17 @@ class Decoder():
 
 
 class Seq2Seq_with_attention():
-    def __init__(self, units, encoder, decoder, attention, batch_size, feature_num):
+    def __init__(self, units, encoder, decoder, attention, feature_num):
         self.fc = tf.keras.layers.Dense(units)
         self.encoder = encoder
         self.decoder = decoder
         self.attention = attention
-        self.batch_size = batch_size
         self.feature_num = feature_num
         self.units = units
 
-    def initial_state(self):
-        initial_state = tf.zeros([self.batch_size, self.encoder.units])
-        return initial_state
+    # def initial_state(self):
+    #     initial_state = tf.zeros_like([self.batch_size, self.encoder.units])
+    #     return initial_state
 
     def encode(self, inputs, initial_state):
         # inputs shape          [batch size, sequence length, feature_num]
@@ -77,9 +76,8 @@ class Seq2Seq_with_attention():
         decoder_output = self.fc(decoder_output)
         return decoder_output, decoder_state
 
-    def decode_training(self, encoder_outputs, encoder_state, targets, target_length):
+    def decode_training(self, encoder_outputs, encoder_state, targets, target_length, dec_input_init):
         # targets shape             [batch size, target length, feature_num]
-        dec_input_init = tf.zeros([self.batch_size, 1, self.feature_num])
         decoder_outputs, decoder_state = self.decode(dec_input_init, hidden_state=encoder_state,
                                                      encoder_outputs=encoder_outputs)
         for t in range(0, target_length - 1):
@@ -90,8 +88,7 @@ class Seq2Seq_with_attention():
             decoder_outputs = tf.concat([decoder_outputs, decoder_output], axis=1)
         return decoder_outputs
 
-    def teacher_forcing(self, encoder_outputs, encoder_state, target_length):
-        dec_input_init = tf.zeros([self.batch_size, 1, self.feature_num])
+    def teacher_forcing(self, encoder_outputs, encoder_state, target_length, dec_input_init):
         decoder_outputs, decoder_state = self.decode(dec_input_init, hidden_state=encoder_state,
                                                      encoder_outputs=encoder_outputs)
         dec_input = decoder_outputs

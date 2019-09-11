@@ -21,10 +21,9 @@ class Seq2seq_model(Model):
         self.encoder_units = 128
 
         with tf.variable_scope("input"):
-            self.inputs = tf.placeholder(tf.float32, [batch_size, None, feature_num], name='inputs')
-            self.targets = tf.placeholder(tf.float32, [batch_size, None, feature_num], name='targets')
-            self.labels = tf.placeholder(tf.float32, [None, num_classes], name='alarm')
-
+            self.inputs = tf.placeholder(tf.float32, [None, None, feature_num], name='inputs')
+            self.targets = tf.placeholder(tf.float32, [None, None, feature_num], name='targets')
+            self.labels = tf.placeholder(tf.float32, [None, None, num_classes], name='alarm')
             self.target_sequence_length = tf.placeholder(tf.int32, [None], name='target_sequence_length')
             self.max_target_len = tf.reduce_max(self.target_sequence_length, name='max_target_lenth')
             self.source_sequence_length = tf.placeholder(tf.int32, [None], name='source_sequence_length')
@@ -41,26 +40,30 @@ class Seq2seq_model(Model):
                                             encoder=encoder,
                                             decoder=decoder,
                                             attention=attention,
-                                            batch_size=batch_size,
                                             feature_num=feature_num)
 
         initial_state = None
         encoder_outputs, encoder_state = self.model.encode(self.inputs, initial_state=initial_state)
+
+        dec_input_init = tf.expand_dims(tf.zeros_like(self.targets[:, 0]), axis=1)
+
         self.outputs_training = self.model.decode_training(encoder_outputs, encoder_state=encoder_state,
-                                                           targets=self.targets, target_length=10)
+                                                           targets=self.targets, target_length=5,
+                                                           dec_input_init=dec_input_init)
         self.outputs_implementing = self.model.teacher_forcing(encoder_outputs, encoder_state=encoder_state,
-                                                               target_length=self.target_sequence_length)
+                                                               target_length=5, dec_input_init=dec_input_init)
         self.classifier = tf.keras.layers.Dense(units=num_classes)
-        self.logits_training = self.classifier(self.outputs_training)
-        self.logits_implementing = self.classifier(self.outputs_training)
+
+        # self.logits_training = self.classifier(self.outputs_training)
+        # self.logits_implementing = self.classifier(self.outputs_training)
 
         def error_classification(outputs, targets, labels):
             logits = self.classifier(outputs)
             loss_1 = tf.reduce_mean(tf.square(outputs - targets))
-            loss_2 = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels)
+            loss_2 = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels))
             prediction = tf.nn.softmax(logits)
-            prediction = tf.argmax(prediction, 1)
-            real = tf.argmax(labels, 1)
+            prediction = tf.argmax(prediction, 2)
+            real = tf.argmax(labels, 2)
             accuracy = tf.reduce_mean(tf.cast(tf.equal(prediction, real), tf.float32))
 
             return logits, loss_1 + loss_2, prediction, accuracy
@@ -128,4 +131,4 @@ class Seq2seq_model(Model):
     def train(self, **kwargs):
         pass
 
-a = Seq2seq_model('test/','test/', 1024, 2, 45, 100, 0.001)
+
