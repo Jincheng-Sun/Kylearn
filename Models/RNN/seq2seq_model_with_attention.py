@@ -6,11 +6,12 @@ from utils.string_utils import DictFormatter
 from visualization.draw_matrix import *
 from evaluation.metrics import confusion_matrix
 import collections
+from Models.RNN.encoder_decoder import Encoder, Decoder, Bahdanau_attention, Seq2Seq_with_attention
 
 
 class Seq2seq_model(Model):
 
-    def __init__(self, ckpt_path, tsboard_path, network, input_shape, num_classes, feature_num,
+    def __init__(self, ckpt_path, tsboard_path, units, num_classes, feature_num,
                  batch_size, lr, regression=False, threshold=0.99, patience=10):
         super().__init__(ckpt_path, tsboard_path)
 
@@ -20,101 +21,111 @@ class Seq2seq_model(Model):
         self.encoder_units = 128
 
         with tf.variable_scope("input"):
-            self.inputs = tf.placeholder(tf.float32, [batch_size, None, feature_num] + input_shape, name='inputs')
+            self.inputs = tf.placeholder(tf.float32, [batch_size, None, feature_num], name='inputs')
             self.targets = tf.placeholder(tf.float32, [batch_size, None, feature_num], name='targets')
+            self.labels = tf.placeholder(tf.float32, [None, num_classes], name='alarm')
+
             self.target_sequence_length = tf.placeholder(tf.int32, [None], name='target_sequence_length')
             self.max_target_len = tf.reduce_max(self.target_sequence_length, name='max_target_lenth')
             self.source_sequence_length = tf.placeholder(tf.int32, [None], name='source_sequence_length')
 
             self.is_training = tf.placeholder(dtype=tf.bool, shape=(), name='is_training')
 
-        def encoder(inputs, units, initial_state):
-            # inputs shape          [batch size, sequence length, feature_num]
-            # outputs shape         [batch size, sequence length, units]
-            # hidden state shape    [batch size, units]
-
-            lstm = tf.keras.layers.LSTM(units=units,
-                                        return_sequences=True,
-                                        return_state=True,
-                                        recurrent_initializer='glorot_uniform')
-
-            outputs, state = lstm(inputs, initial_state=initial_state)
-
-            return outputs, state
-
-        def decoder(input, units, hidden_state):
-            # inputs shape [batch size, 1, encoder_units]
-            # concat shape [batch size, 1, feature_num + encoder_units]
-            # outputs shape [batch size, sequence length, units]
-            # hidden state shape [batch size, units]
-            lstm = tf.keras.layers.LSTM(units=units,
-                                        return_sequences=True,
-                                        return_state=True,
-                                        recurrent_initializer='glorot_uniform')
-
-            hidden_state_expandim = tf.expand_dims(hidden_state, axis=1)
-            concat = tf.concat([input, hidden_state_expandim], axis=-1)
-
-            output, state = lstm(concat)
-
-            return output, state
-
         def max_length(tensor):
             return max(len(t) for t in tensor)
 
-        def attention_idea2(encoder_outputs, decoder_input):
-            with tf.variable_scope('idea1_attention'):
-                decoder_input = tf.tile(decoder_input, [1, encoder_outputs.shape[1], 1])
-                concat = tf.concat([encoder_outputs, decoder_input], axis=-1)
-                score = tf.nn.tanh(tf.layers.dense(inputs=concat, units=1))
-                attention_weights = tf.nn.softmax(score, axis=1)
-                encoder_outputs_sum = attention_weights * encoder_outputs
-                encoder_outputs_sum = tf.reduce_sum(encoder_outputs_sum, axis=1)
-            return encoder_outputs_sum, attention_weights
+        encoder = Encoder(units)
+        decoder = Decoder(units)
+        attention = Bahdanau_attention(256)
+        self.model = Seq2Seq_with_attention(units=feature_num,
+                                            encoder=encoder,
+                                            decoder=decoder,
+                                            attention=attention,
+                                            batch_size=batch_size,
+                                            feature_num=feature_num)
 
-        def attention_bahdanau(encoder_outputs, hidden_state, units):
-            with tf.variable_scope('bahadanau_attention'):
-                # encoder outputs       [batch size, sequence length, encoder_units]
-                # hidden state          [batch size, encoder_units]
-                # hidden_state_exp      [batch size, 1, encoder_units]
-                # encoder_outputs_sum   [batch size, units]
-                # attention_weights     [batch size, sequence length, 1]
+        initial_state = None
+        encoder_outputs, encoder_state = self.model.encode(self.inputs, initial_state=initial_state)
+        self.outputs_training = self.model.decode_training(encoder_outputs, encoder_state=encoder_state,
+                                                           targets=self.targets, target_length=10)
+        self.outputs_implementing = self.model.teacher_forcing(encoder_outputs, encoder_state=encoder_state,
+                                                               target_length=self.target_sequence_length)
+        self.classifier = tf.keras.layers.Dense(units=num_classes)
+        self.logits_training = self.classifier(self.outputs_training)
+        self.logits_implementing = self.classifier(self.outputs_training)
 
-                hidden_state_expandim = tf.expand_dims(hidden_state, 1)
-                map1 = tf.layers.dense(inputs=hidden_state_expandim, units=units)
-                map2 = tf.layers.dense(inputs=encoder_outputs, units=units)
-                score = tf.nn.tanh(tf.layers.dense(inputs=map1 + map2, units=1))
-                attention_weights = tf.nn.softmax(score, axis=1)
-                encoder_outputs_sum = attention_weights * encoder_outputs
-                encoder_outputs_sum = tf.reduce_sum(encoder_outputs_sum, axis=1)
-            return encoder_outputs_sum, attention_weights
+        def error_classification(outputs, targets, labels):
+            logits = self.classifier(outputs)
+            loss_1 = tf.reduce_mean(tf.square(outputs - targets))
+            loss_2 = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels)
+            prediction = tf.nn.softmax(logits)
+            prediction = tf.argmax(prediction, 1)
+            real = tf.argmax(labels, 1)
+            accuracy = tf.reduce_mean(tf.cast(tf.equal(prediction, real), tf.float32))
 
-        def attention_bahdanau_modified(encoder_outputs, hidden_state):
-            with tf.variable_scope('bahdanau_modified_attention'):
-                hidden_state_repeat = tf.tile(hidden_state, [1, encoder_outputs.shape[1], 1])
-                concat = tf.concat([hidden_state_repeat, encoder_outputs], axis=-1)
-                score = tf.nn.tanh(tf.layers.dense(inputs=concat, units=1))
-                attention_weights = tf.nn.softmax(score, axis=1)
-                encoder_outputs_sum = attention_weights * encoder_outputs
-                encoder_outputs_sum = tf.reduce_sum(encoder_outputs_sum, axis=1)
-            return encoder_outputs_sum, attention_weights
+            return logits, loss_1 + loss_2, prediction, accuracy
 
-        def seq2seq_model(inputs, units, targets):
-            encoder_outputs, encoder_state = encoder(inputs=inputs, units=units,
-                                                     initial_state=tf.zeros((batch_size, units)))
-            encoder_outputs_sum, attention_weights = attention_bahdanau(encoder_outputs=encoder_outputs,
-                                                                        hidden_state=encoder_state, units=128)
+        def error_single_loss_classification(outputs, labels):
+            logits = self.classifier(outputs)
+            loss_2 = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=labels)
+            prediction = tf.nn.softmax(logits)
+            prediction = tf.argmax(prediction, 1)
+            real = tf.argmax(labels, 1)
+            accuracy = tf.reduce_mean(tf.cast(tf.equal(prediction, real), tf.float32))
 
-            decoder_input = tf.zeros([batch_size, 1, feature_num])
-            decoder_state = encoder_outputs_sum
-            for t in range(0, targets.shape[1]):
-                decoder_output, decoder_state = decoder(decoder_input, units=units, hidden_state=decoder_state)
-                # stack decoder_output
-                decoder_input = tf.expand_dims(targets[:, t], 1)
+            return logits, loss_2, prediction, accuracy
 
+        def error_regression(outputs, targets, labels, threshold=0.9):
+            logits = self.classifier(outputs)
+            proba = tf.nn.sigmoid(logits)
+            loss_1 = tf.reduce_mean(tf.square(outputs - targets))
+            loss_2 = tf.reduce_mean(tf.square(proba - labels))
 
-            return decoder_outputs
+            threshold = tf.constant(threshold)
+            condition = tf.greater_equal(proba, threshold)
+            prediction = tf.where(condition, tf.ones_like(proba), tf.zeros_like(proba),
+                                  name='prediction')
+            accuracy = tf.reduce_mean(tf.cast(tf.equal(prediction, labels), tf.float32))
 
-        def fully connected()
+            return logits, loss_1 + loss_2, prediction, accuracy
 
-        # need to finish loss, training
+        def error_single_loss_regression(outputs, labels, threshold=0.9):
+            logits = self.classifier(outputs)
+            proba = tf.nn.sigmoid(logits)
+            loss_2 = tf.reduce_mean(tf.square(proba - labels))
+
+            threshold = tf.constant(threshold)
+            condition = tf.greater_equal(proba, threshold)
+            prediction = tf.where(condition, tf.ones_like(proba), tf.zeros_like(proba),
+                                  name='prediction')
+            accuracy = tf.reduce_mean(tf.cast(tf.equal(prediction, labels), tf.float32))
+
+            return logits, loss_2, prediction, accuracy
+
+        self.logits, self.loss, self.prediction, self.accuracy = error_classification(self.outputs_training,
+                                                                                      self.targets, self.labels)
+        optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+
+        '''when training, the moving_mean and moving_variance need to be updated. 
+        By default the update ops are placed in tf.GraphKeys.UPDATE_OPS,
+        so they need to be executed alongside the train_op.
+        Also, be sure to add any batch_normalization ops before getting the update_ops collection. 
+        Otherwise, update_ops will be empty, and training/inference will not work properly. '''
+
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        train_op = optimizer.minimize(self.loss, global_step=self.global_step)
+        self.train_op = tf.group([train_op, update_ops])
+        self.saver = tf.train.Saver(max_to_keep=11)
+        self.writer = tf.summary.FileWriter(self.tensorboard_path)
+
+    def initialize_variables(self, **kwargs):
+        init_op = tf.group(tf.global_variables_initializer(), tf.local_variables_initializer())
+        self.run(init_op)
+
+    def run(self, *args, **kwargs):
+        return self.session.run(*args, **kwargs)
+
+    def train(self, **kwargs):
+        pass
+
+a = Seq2seq_model('test/','test/', 1024, 2, 45, 100, 0.001)
