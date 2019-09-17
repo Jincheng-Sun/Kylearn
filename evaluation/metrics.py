@@ -1,6 +1,7 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.metrics import roc_auc_score, roc_curve
+from sklearn.metrics import precision_recall_curve, auc
 from sklearn.metrics import classification_report
 def metrics_binary(y_pred, threshold, y_test):
     y_pred_copy = y_pred.copy()
@@ -32,3 +33,8 @@ def auc_roc(y_pred, y_test):
     auc = roc_auc_score(y_true=y_test, y_score=y_pred)
     fprs, tprs, thresholds = roc_curve(y_true=y_test, y_score=y_pred)
     return auc, fprs, tprs, thresholds
+
+def precision_recall(y_pred, y_test):
+    precisions, recalls, thresholds = precision_recall_curve(y_true=y_test, probas_pred=y_pred)
+    area = auc(recalls, precisions)
+    return area, precisions, recalls, thresholds
