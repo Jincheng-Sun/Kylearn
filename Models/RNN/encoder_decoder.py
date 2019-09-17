@@ -16,7 +16,7 @@ class Encoder():
                                        return_state=True,
                                        recurrent_initializer='glorot_uniform')
 
-    def __call__(self, inputs, initial_state):
+    def __call__(self, inputs, initial_state=None):
         # inputs shape          [batch size, sequence length, feature_num]
         # initial_state shape   [batch size, units]
         outputs, state = self.gru(inputs, initial_state=initial_state)
@@ -76,6 +76,8 @@ class Seq2Seq_with_attention():
         decoder_output = self.fc(decoder_output)
         return decoder_output, decoder_state
 
+
+
     def decode_training(self, encoder_outputs, encoder_state, targets, target_length, dec_input_init):
         # targets shape             [batch size, target length, feature_num]
         decoder_outputs, decoder_state = self.decode(dec_input_init, hidden_state=encoder_state,
@@ -86,6 +88,7 @@ class Seq2Seq_with_attention():
                                                         encoder_outputs=encoder_outputs)
             # stack decoder_output
             decoder_outputs = tf.concat([decoder_outputs, decoder_output], axis=1)
+            decoder_outputs = tf.nn.sigmoid(decoder_outputs)
         return decoder_outputs
 
     def teacher_forcing(self, encoder_outputs, encoder_state, target_length, dec_input_init):
