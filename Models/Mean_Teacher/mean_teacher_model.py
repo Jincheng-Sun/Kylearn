@@ -16,7 +16,7 @@ class Mean_Teacher_model_1d(Model):
                  regression = False, threshold=0.99, patience=10):
         super().__init__(ckpt_path, tsboard_path)
 
-        self.logger = log_down('train_log')
+        self.logger = log_down('train_log', 'a')
         self.batch_size = batch_size
         self.patience = 0
         self.patience_max = patience
