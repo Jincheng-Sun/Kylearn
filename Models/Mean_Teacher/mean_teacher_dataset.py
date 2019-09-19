@@ -53,7 +53,7 @@ class Mean_Teacher_dataset(Dataset):
         self.test_set['dev'] = dev2
         self.test_set['y'] = y2
 
-        self.test_set, self.val_set = train_test_split(self.test_set, test_size=0.3, random_state=22)
+        self.test_set, self.val_set = train_test_split(self.test_set, test_size=0.05, random_state=22)
 
     def labeled_generator(self, batch_size=50, random=np.random):
         assert batch_size > 0 and len(self.train_set) > 0
