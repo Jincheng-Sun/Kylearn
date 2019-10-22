@@ -16,7 +16,7 @@ class Mean_Teacher_model_1d(Model):
                  regression = False, threshold=0.99, patience=10):
         super().__init__(ckpt_path, tsboard_path)
 
-        self.logger = log_down('train_log')
+        self.logger = log_down('train_log', 'a')
         self.batch_size = batch_size
         self.patience = 0
         self.patience_max = patience
@@ -235,7 +235,7 @@ class Mean_Teacher_model_2d(Model):
 
     def __init__(self, ckpt_path, tsboard_path, network, input_shape, num_classes, feature_num, dev_num,
                  batch_size, lr, max_step=100000,
-                 wd=0.02, ema_decay=0.999, warmup_pos=0.4, coefficient=50, threshold=0.5, patience=10):
+                 wd=0.02, ema_decay=0.999, warmup_pos=0.4, coefficient=50, regression = False, threshold=0.9, patience=10):
         super().__init__(ckpt_path, tsboard_path)
 
         self.logger = log_down('train_log')
@@ -250,7 +250,7 @@ class Mean_Teacher_model_2d(Model):
         with tf.variable_scope("input"):
             self.input_x = tf.placeholder(tf.float32, [None] + input_shape, name='features')
             self.input_dev = tf.placeholder(tf.float32, [None,], name='dev_type')
-            self.input_y = tf.placeholder(tf.float32, [None, 1], name='alarm')
+            self.input_y = tf.placeholder(tf.float32, [None,], name='alarm')
             self.unlabel_x = tf.placeholder(tf.float32, [None] + input_shape, name='unlabeled_features')
             self.unlabel_dev = tf.placeholder(tf.float32, [None,], name='unlabeled_dev_type')
             self.is_training = tf.placeholder(dtype=tf.bool, shape=(), name='is_training')
@@ -264,6 +264,13 @@ class Mean_Teacher_model_2d(Model):
             input_matrices = tf.expand_dims(input_matrices, axis=-1)
             input_matrices_un = tf.gather(self.input_attention, tf.cast(self.unlabel_dev, tf.int32))
             input_matrices_un = tf.expand_dims(input_matrices_un, axis=-1)
+
+        with tf.variable_scope('bias_attention'):
+            output_attn = tf.get_variable('output_attention', [dev_num, num_classes], trainable=True,
+                                          initializer=tf.initializers.zeros)
+            self.output_attention = tf.nn.leaky_relu(output_attn)
+
+            output_bias = tf.gather(self.output_attention, tf.cast(self.input_dev, tf.int32))
 
 
         # # apply attention matrix
@@ -279,7 +286,10 @@ class Mean_Teacher_model_2d(Model):
 
         logits = self.classifier(network, scaled_input_x, num_classes=num_classes,
                               is_training=self.is_training)
-        self.logits = logits
+        if regression:
+            self.logits = logits
+        else:
+            self.logits = logits + output_bias
 
         # Update BN before here
         post_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -295,18 +305,48 @@ class Mean_Teacher_model_2d(Model):
         logits_teacher = tf.stop_gradient(logits_t)
         logits_student = self.classifier(network, scaled_unlabeled_x, num_classes=num_classes,
                               is_training=self.is_training) # This part better use augmented `unlabeled_x`
-        loss_consistency = tf.reduce_mean((tf.nn.sigmoid(logits_teacher) - tf.nn.sigmoid(logits_student)) ** 2, -1)
-        self.loss_c = tf.reduce_mean(loss_consistency)
+        if regression:
+            input_y = tf.expand_dims(self.input_y, axis=-1)
+            self.loss_c = tf.reduce_mean(tf.square(tf.nn.sigmoid(logits_teacher) - tf.nn.sigmoid(logits_student)))
+            with tf.variable_scope('error'):
+                # For a weighted loss, `x = logits`, `z = labels`, `q = pos_weight`.
+                # The loss is:
+                #         qz * -log(sigmoid(x)) + (1 - z) * -log(1 - sigmoid(x))
+                #       = qz * -log(1 / (1 + exp(-x))) + (1 - z) * -log(exp(-x) / (1 + exp(-x)))
+                #       = qz * log(1 + exp(-x)) + (1 - z) * (-log(exp(-x)) + log(1 + exp(-x)))
+                #       = qz * log(1 + exp(-x)) + (1 - z) * (x + log(1 + exp(-x))
+                #       = (1 - z) * x + (qz +  1 - z) * log(1 + exp(-x))
+                #       = (1 - z) * x + (1 + (q - 1) * z) * log(1 + exp(-x))
+                # self.loss = tf.nn.weighted_cross_entropy_with_logits(targets=input_y,logits=self.logits, pos_weight=2000)
+                # self.loss = tf.reduce_mean(self.loss)
+                # self.proba = tf.nn.sigmoid(self.logits)
 
-        with tf.variable_scope('error'):
-            self.proba = tf.nn.sigmoid(self.logits)
-            self.error = self.proba - self.input_y
-            self.loss = tf.reduce_mean(tf.square(self.error))
-            threshold = tf.constant(threshold)
-            condition = tf.greater_equal(self.proba, threshold)
-            self.prediction = tf.where(condition, tf.ones_like(self.proba), tf.zeros_like(self.proba), name='prediction')
-            self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.prediction, self.input_y), tf.float32))
+                self.proba = tf.nn.sigmoid(self.logits)
+                self.error = self.proba - input_y
+                self.loss = tf.reduce_mean(tf.square(self.error))
 
+                threshold = tf.constant(threshold)
+                condition = tf.greater_equal(self.proba, threshold)
+                self.prediction = tf.where(condition, tf.ones_like(self.proba), tf.zeros_like(self.proba),
+                                           name='prediction')
+                self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.prediction, input_y), tf.float32))
+
+
+        else:
+            onehot_y = tf.cast(self.input_y, tf.int32)
+            self.onehot_y = tf.one_hot(onehot_y, num_classes)
+            with tf.variable_scope('error'):
+                loss_consistency = tf.reduce_mean(
+                    (tf.nn.softmax(logits_teacher) - tf.nn.softmax(logits_student)) ** 2, -1)
+                self.loss_c = tf.reduce_mean(loss_consistency)
+                self.proba = tf.nn.sigmoid(self.logits)
+                self.loss = tf.reduce_mean(
+                    # use `sparse`, no need to one-hot the `input_y`
+                    tf.nn.softmax_cross_entropy_with_logits_v2(labels=self.onehot_y, logits=self.logits))
+                self.prediction = tf.nn.softmax(self.logits)
+                self.prediction = tf.argmax(self.prediction, 1)
+                self.real = tf.argmax(self.onehot_y, 1)
+                self.accuracy = tf.reduce_mean(tf.cast(tf.equal(self.prediction, self.real), tf.float32))
 
         tf.summary.scalar('losses/xe', self.loss)
         tf.summary.scalar('losses/mt', self.loss_c)
@@ -350,10 +390,38 @@ class Mean_Teacher_model_2d(Model):
                                                        evaluation_span=100,
                                                        max_step=self.max_step)  # batch*evaluation_span = dataset size = one epoch
 
-        for labeled_pos, labeled_neg, unlabeled in dataset.training_generator(pos=round(self.batch_size*0.25),
-                                                             neg=round(self.batch_size*0.25),
-                                                             un=round(self.batch_size*0.5)):
-            labeled = np.concatenate([labeled_pos, labeled_neg], axis=0)
+        for labeled, unlabeled in dataset.training_generator(batch_size=self.batch_size, portion= 0.5):
+
+            accuracy, loss, lossc, wm, _ = self.run([self.accuracy, self.loss,
+                                                     self.loss_c, self.warmup,
+                                                 self.train_op],
+                                        feed_dict={self.input_x: labeled['x'],
+                                                   self.input_dev: labeled['dev'],
+                                                   self.input_y: labeled['y'],
+                                                   self.unlabel_x: unlabeled['x'],
+                                                   self.unlabel_dev: unlabeled['dev'],
+                                                   self.is_training: True})
+            step_control = self.run(self.training_control)
+            if step_control['time_to_print']:
+                print('train_loss = ' + str(loss) +
+                      '     consis_loss= '+str(lossc) +
+                      '     train_acc= '+str(accuracy) +
+                      '     step ' + str(step_control['step']) +
+                      '     warmup' + str(wm))
+            if step_control['time_to_stop']:
+                self.save_checkpoint()
+                break
+            if step_control['time_to_evaluate']:
+                self.evaluate(dataset.val_set)
+                self.save_checkpoint()
+
+    def balance_train(self, dataset):
+        self.training_control = utils.training_control(self.global_step, print_span=10,
+                                                       evaluation_span=100,
+                                                       max_step=self.max_step)  # batch*evaluation_span = dataset size = one epoch
+
+        for labeled, unlabeled in dataset.balance_training_generator(batch_size=self.batch_size, portion= 0.5):
+
             accuracy, loss, lossc, wm, _ = self.run([self.accuracy, self.loss,
                                                      self.loss_c, self.warmup,
                                                  self.train_op],
@@ -427,8 +495,8 @@ class Mean_Teacher_model_2d(Model):
         return proba
 
     def get_attn_matrix(self):
-        scaling_attention = self.run([self.input_attention])
-        return scaling_attention
+        scaling_attention, bias_attention = self.run([self.input_attention, self.output_attention])
+        return scaling_attention, bias_attention
 
 class Mean_Teacher_model_1d_resample(Model):
 

@@ -1,6 +1,5 @@
 #filepath
 data/
-models/
 __pycache__/
 #ide files
 .idea/

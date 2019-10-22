@@ -10,6 +10,7 @@ class Attn_dataset_1d(Dataset):
 
         # train set
         X = np.load(feature_path + '_train.npy')
+        X = np.expand_dims(X, -1)
         dev = np.load(dev_path + '_train.npy')
         # y = np.load(label_path + '_train.npy').reshape(-1)
         # y = y-1
@@ -29,6 +30,7 @@ class Attn_dataset_1d(Dataset):
 
         # test_set
         X2 = np.load(feature_path + '_test.npy')
+        X2 = np.expand_dims(X2, -1)
         dev2 = np.load(dev_path + '_test.npy')
         y2 = np.load(label_path + '_test.npy').reshape([-1,out_num])
         assert X2.shape[0] == y2.shape[0]
@@ -43,7 +45,7 @@ class Attn_dataset_1d(Dataset):
         self.test_set['dev'] = dev2
         self.test_set['y'] = y2
 
-        self.train_set, self.val_set = train_test_split(self.train_set, test_size=0.1, random_state=22)
+        self.train_set, self.val_set = train_test_split(self.train_set, test_size=0.002, random_state=22)
 
 class Attn_dataset_2d(Dataset):
     def __init__(self, feature_path, dev_path, label_path, out_num):

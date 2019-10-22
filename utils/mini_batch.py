@@ -30,3 +30,16 @@ def random_index(max_index, batch_size, random=np.random):
 
     eternal_random_indices = chain.from_iterable(random_ranges())
     return batch_slices(eternal_random_indices)
+
+def series_index(max_index, batch_size):
+    def series_ranges():
+        while True:
+            indices = np.arange(max_index)
+            yield indices
+
+    def batch_slices(iterable):
+        while True:
+            yield np.array(list(islice(iterable, batch_size)))
+
+    eternal_indices = chain.from_iterable(series_ranges())
+    return batch_slices(eternal_indices)

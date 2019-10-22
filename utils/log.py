@@ -1,9 +1,9 @@
 import logging
 
-def log_down(logfile):
+def log_down(logfile, mode = 'w'):
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    fh = logging.FileHandler(logfile, mode='w')
+    fh = logging.FileHandler(logfile, mode=mode)
     fh.setLevel(logging.INFO)
     sh = logging.StreamHandler()
     sh.setLevel(logging.INFO)
